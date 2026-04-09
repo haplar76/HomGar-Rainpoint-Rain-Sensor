@@ -1,0 +1,9 @@
+{
+  "name": "Homgar Smart Garden",
+  "content_in_root": false,
+  "filename": "homgar",
+  "country": ["US", "CA", "EU"],
+  "homeassistant": "2023.1.0",
+  "render_readme": true,
+  "domains": ["sensor", "binary_sensor"]
+}
