@@ -1,6 +1,196 @@
 # Homgar Home Assistant Integration
 
-This integration connects your RainPoint Smart+ garden devices to Home Assistant through the Homgar API.
+This integration is a corrected version of the bapesupreme/homgar-homeassistant available on Github.
+I have downloaded the [bapesupreme/homgar-homeassistant](https://github.com/bapesupreme/homgar-homeassistant) files and they did not work in HA.
+I made the corrections as listed below and can confirm that I have a working installation in HA for RainPoiny Smart Rain Sensor – Wi-Fi Control – model:HCS012ARF
+
+<img width="531" height="151" alt="image" src="https://github.com/user-attachments/assets/e8836943-4779-40b5-a798-02744933e16c" />
+
+## What was changed to get the integration working
+
+This implementation includes a number of fixes to make the Homgar custom integration load correctly in Home Assistant, support newer RainPoint hardware, and expose working rain/battery entities.
+
+### 1. Fixed import and config flow loading issues
+
+**Files changed**
+- `custom_components/homgar/__init__.py`
+- `custom_components/homgar/config_flow.py`
+- `custom_components/homgar/api.py`
+- `custom_components/homgar/homgar_api/homgarapi/api.py`
+
+**Changes**
+- Fixed broken imports that prevented Home Assistant from loading the integration.
+- Changed vendored library imports from absolute imports to relative imports:
+  - `from homgarapi.devices ...` → `from .devices ...`
+  - `from homgarapi.logutil ...` → `from .logutil ...`
+- Updated `__init__.py` and `config_flow.py` to import from the local integration wrapper instead of a missing module.
+- Removed config-flow validation that depended on unsupported user-info calls.
+
+This resolved the Home Assistant error:
+
+`Config flow could not be loaded: {"message":"Invalid handler specified"}`
+
+and later:
+
+`No module named 'homgarapi'`
+
+---
+
+### 2. Reworked the Home Assistant API wrapper
+
+**File changed**
+- `custom_components/homgar/api.py`
+
+**Changes**
+- Updated the wrapper to use the bundled vendored API correctly:
+  - `HomgarApi()`
+  - `login(email, password)`
+  - `get_homes()`
+  - `get_devices_for_hid(hid)`
+  - `get_device_status(hub)`
+- Flattened hubs and subdevices into Home Assistant-friendly dictionaries.
+- Changed status refresh to pass the full device object, not just a device ID.
+- Added proper Home Assistant-facing status values for:
+  - `battery_level`
+  - `signal_strength`
+  - `rain_amount`
+  - `rain_hourly`
+  - `rain_daily`
+  - `rain_7days`
+  - `rain_total`
+  - `rain_detected`
+  - `raw_status`
+  - `raw_status_map`
+
+---
+
+### 3. Improved coordinator refresh logic
+
+**File changed**
+- `custom_components/homgar/__init__.py`
+
+**Changes**
+- Updated the coordinator to call `async_get_device_status(device)` using the full device dictionary.
+- Added typing cleanup for the update coordinator data structure.
+- Reduced the update interval from 5 minutes to 15 seconds while testing so device updates are visible more quickly.
+
+---
+
+### 4. Fixed brittle status parsing in the vendored device layer
+
+**File changed**
+- `custom_components/homgar/homgar_api/homgarapi/devices.py`
+
+**Changes**
+- Made parsing more defensive so the integration does not crash on newer payload formats.
+- Added support for raw status payloads when values do not follow the older `general;specific` format.
+- Fixed general RSSI parsing so malformed or shortened payloads do not crash the integration.
+- Added `raw_status` and `raw_status_map` storage for debugging and newer device support.
+
+This resolved parsing errors like:
+
+- `not enough values to unpack (expected 2, got 1)`
+- `invalid literal for int() ...`
+
+---
+
+### 5. Added support for newer modelCode 289 hardware
+
+**File changed**
+- `custom_components/homgar/homgar_api/homgarapi/devices.py`
+
+**Changes**
+- Added a new device class:
+  - `RainPointBridgeV2`
+- Mapped `modelCode = 289` in `MODEL_CODE_MAPPING`
+- Configured the newer device to listen to:
+  - `connected`
+  - `state`
+  - `D01`
+
+This stopped newer RainPoint/Homgar devices from failing setup as unknown models.
+
+---
+
+### 6. Decoded the newer rain-sensor D01 payload
+
+**File changed**
+- `custom_components/homgar/api.py`
+
+**Changes**
+- Added decoding logic for the newer binary/hex payload returned in `D01`
+- Converted the payload from:
+  - `10#E10000FD040000FD050E01FD060E01DC01970E010000`
+  into bytes
+- Parsed `0xFD` tagged values
+- Extracted rain counters from tags `FD 05` and `FD 06`
+- Converted values from tenths of a millimeter into `mm`
+
+This was verified against the HomGar app by pouring water into the sensor and confirming that the decoded `27.0 mm` value matched the app.
+
+---
+
+### 7. Added additional rain sensors
+
+**Files changed**
+- `custom_components/homgar/const.py`
+- `custom_components/homgar/api.py`
+- `custom_components/homgar/sensor.py`
+
+**Changes**
+- Added support for these rain sensors:
+  - `Rain Past Hour`
+  - `Rain Past 24 Hours`
+  - `Rain Past 7 Days`
+  - `Rain Total`
+- Exposed `Rain Detected` as a binary sensor
+- Added `raw_status` and `raw_status_map` as extra attributes for troubleshooting
+
+---
+
+### 8. Added binary sensor support for rain detection
+
+**Files changed**
+- `custom_components/homgar/binary_sensor.py`
+- `custom_components/homgar/sensor.py`
+
+**Changes**
+- Extended binary sensor attributes to include:
+  - `raw_status`
+  - `raw_status_map`
+- Added `rain_detected` mapping to surface current rain state in Home Assistant
+
+---
+
+### 9. Cleaned up const/entity definitions
+
+**File changed**
+- `custom_components/homgar/const.py`
+
+**Changes**
+- Added new rain sensor definitions
+- Removed unsupported `signal_strength` device class assignment for better HA compatibility
+
+---
+
+## Current result
+
+With these changes, the integration now:
+
+- loads correctly in Home Assistant
+- creates the config flow correctly
+- discovers the device successfully
+- supports newer `modelCode 289` hardware
+- creates working rain entities
+- decodes rain values from the newer D01 payload
+- exposes battery, signal strength, and raw diagnostic attributes
+
+## Notes / known limitations
+
+- Battery percentage on newer devices is still heuristic because the first field in `state` appears to behave more like a battery/status code than a true percentage.
+- The rain payload decoding works for the tested newer rain sensor, but other newer models may still need additional reverse engineering.
+
+# Origninal Bapesupreme Notes
 
 ## Supported Devices
 
@@ -194,7 +384,7 @@ The integration updates device data every 5 minutes to avoid overwhelming the Ho
 
 ## Contributing
 
-This integration is based on the [homgarapi](https://github.com/Remboooo/homgarapi) library. For issues with device communication, please also check that repository.
+This integration is based on the [homgarapi](https://github.com/Remboooo/homgarapi) library and correction of [bapesupreme/homgar-homeassistant](https://github.com/bapesupreme/homgar-homeassistant). For issues with device communication, please also check that repository.
 
 ## Support
 
